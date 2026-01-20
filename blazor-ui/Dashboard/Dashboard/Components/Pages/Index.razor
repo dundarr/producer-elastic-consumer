@@ -1,0 +1,143 @@
+﻿@page "/"
+@using System.Globalization
+@using Producer.Dashboard.Services
+@rendermode InteractiveServer
+@inject ProducerService Producer
+@inject IConfiguration Config
+@implements IDisposable
+
+<div class="vintage-container">
+    <div class="panel-header">
+        <h2>TELEMETRY UNIT - V1950</h2>
+    </div>
+
+    <div class="row mt-4 text-center">
+        <div class="col-md-3">
+            <label class="d-block mb-2">POWER </label>
+            <div class="d-flex flex-column align-items-center">
+                <div class="toggle-switch @(isRunning ? "up" : "down")" @onclick="ToggleProducer">
+                    <div class="handle"></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <label class="d-block mb-2">STATE</label>
+            <div class="d-flex flex-column align-items-center">
+                <span class="mt-2">@(isRunning ? "ACTIVE" : "OFF")</span>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <label class="d-block mb-2">FLOW VELOCITY (-50 to +50)</label>
+            <svg viewBox="0 0 100 60" style="max-width: 300px;">
+                <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#555" stroke-width="5" />
+                <line x1="50" y1="50" x2="@NeedleX" y2="@NeedleY" stroke="#e74c3c" stroke-width="2" />
+                <circle cx="50" cy="50" r="3" fill="#ecf0f1" />
+            </svg>
+            <div class="mt-2" style="color:#e74c3c">SPEED: @currentSpeed.ToString("F2")</div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="mb-4">
+                <label class="d-block">CONSUMERS</label>
+                <div class="nixie-tube small">@consumerCount</div>
+            </div>
+            <div>
+                <label class="d-block">QUEUE MSG</label>
+                <div class="nixie-tube small">@queueLength</div>
+            </div>
+        </div>
+    </div>
+
+    <hr style="border-color: #444" />
+
+    <div class="row align-items-center justify-content-center">
+        <div class="col-md-4 text-center">
+            <label class="d-block">CURRENT RATE</label>
+            <div class="nixie-tube">@currentRate</div>
+        </div>
+        <div class="col-md-4 text-center">
+            <label class="d-block">ADJUST RATE</label>
+            <input type="number"
+                   @bind-value="newRateValue"
+                   @bind-value:event="oninput"
+                   class="vintage-input" />
+            <button type="button" @onclick="UpdateRate" class="metal-button ms-2">COMMIT</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool isRunning;
+    private double currentSpeed;
+    private int currentRate;
+    private int newRateValue;
+    private int consumerCount;
+    private long queueLength;
+    private System.Threading.Timer? _timer;
+
+    // Propiedades calculadas para el SVG con Culture Invariant
+    private string NeedleX => (50 + 35 * Math.Cos(CalculateAngle())).ToString(CultureInfo.InvariantCulture);
+    private string NeedleY => (50 - 35 * Math.Sin(CalculateAngle())).ToString(CultureInfo.InvariantCulture);
+
+    private double CalculateAngle()
+    {
+        double clamped = Math.Clamp(currentSpeed, -50, 50);
+        double percent = (clamped + 50) / 100;
+        return Math.PI * (1 - percent);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshData();
+        int interval = Config.GetValue<int>("ProducerApi:PollingIntervalSeconds", 2);
+        _timer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshData), null, 0, interval * 1000);
+    }
+
+    private async Task RefreshData()
+    {
+        try
+        {
+            isRunning = await Producer.IsRunningAsync();
+            currentSpeed = await Producer.GetSpeedAsync();
+            currentRate = await Producer.GetRateAsync();
+            consumerCount = await Producer.GetConsumerCountAsync();
+            queueLength = await Producer.GetQueueLengthAsync();
+            StateHasChanged();
+        }
+        catch { /* Handle disconnection */ }
+    }
+
+    private async Task ToggleProducer()
+    {
+        if (isRunning) await Producer.StopAsync();
+        else await Producer.StartAsync();
+        await RefreshData();
+    }
+
+    private async Task UpdateRate()
+    {
+        if (newRateValue < 0)
+        {
+            Console.WriteLine("Valor de rate inválido (negativo)");
+            return;
+        }
+
+        try
+        {
+            Console.WriteLine($"Enviando rate: {newRateValue}");
+            await Producer.SetRateAsync(newRateValue);
+            
+            await Task.Delay(100);
+            await RefreshData();
+            
+            Console.WriteLine("Rate actualizado correctamente");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error enviando rate: {ex.Message}");
+        }
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

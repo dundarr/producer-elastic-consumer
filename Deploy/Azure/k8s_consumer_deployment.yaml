@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer
+spec:
+  replicas: 0   # ⚠️ KEDA controla esto
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+      - name: consumer
+        image: pcdemoacr.azurecr.io/consumer:latest
+        env:
+        - name: "DOTNET_ENVIRONMENT"
+          value: "Kubernetes"
+        - name: Queue__ConnectionString
+          valueFrom:
+            secretKeyRef:
+              name: azurite-connection # Nombre del secret de KEDA
+              key: connection     
+        

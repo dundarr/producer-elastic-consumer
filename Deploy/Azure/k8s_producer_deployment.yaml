@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: producer
+  template:
+    metadata:
+      labels:
+        app: producer
+    spec:
+      containers:
+      - name: producer
+        image: pcdemoacr.azurecr.io/producer:latest
+        env:
+        - name: "DOTNET_ENVIRONMENT"
+          value: "Kubernetes"
+        - name: Queue__ConnectionString
+          valueFrom:
+            secretKeyRef:
+              name: azurite-connection # Nombre del secret de KEDA
+              key: connection          # Clave definida en k8s_keda_secret.yaml
+        ports:
+        - containerPort: 3000
+                

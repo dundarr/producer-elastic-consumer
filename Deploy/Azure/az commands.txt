@@ -1,0 +1,56 @@
+#0 Registrarse en estos namespaces
+
+az provider register --namespace Microsoft.Cdn
+az provider register --namespace Microsoft.ContainerRegistry
+az provider register --namespace Microsoft.Storage
+az provider register --namespace Microsoft.ContainerService
+
+# 1. Crear grupo de recursos
+az group create --name producer-consumer-demo-rg --location eastus
+
+# 2. Crear Azure Container Registry (ACR) para tus imágenes
+az acr create --resource-group producer-consumer-demo-rg --name pcdemoacr --sku Basic
+
+# 3. Crear Storage Account (para las colas)
+az storage account create --name prodconsdemost --resource-group producer-consumer-demo-rg --location eastus --sku Standard_LRS
+
+# 4. Crear el cluster de AKS y conectarlo al ACR
+az aks create --resource-group producer-consumer-demo-rg --name producer-consumer-demo-aks --attach-acr pcdemoacr --node-vm-size Standard_D2s_v3 --node-count 1 --generate-ssh-keys
+
+
+
+
+# Obtener cadena de conexión
+az storage account show-connection-string --name prodconsdemost --resource-group producer-consumer-demo-rg
+
+Modificar k8s_keda_secret.yaml
+
+# Login al registro
+az acr login --name pcdemoacr
+
+# Taggear y subir (ejemplo con producer)
+docker tag producer:latest pcdemoacr.azurecr.io/producer:latest
+docker push pcdemoacr.azurecr.io/producer:latest
+
+# Repetir para consumer
+docker tag consumer:latest pcdemoacr.azurecr.io/consumer:latest
+docker push pcdemoacr.azurecr.io/consumer:latest
+
+
+# Para que kubectl apunte a Azure
+ az aks get-credentials --resource-group producer-consumer-demo-rg --name producer-consumer-demo-aks
+ 
+#Instalar Keda en AKS
+kubectl apply -f https://github.com/kedacore/keda/releases/download/v2.12.0/keda-2.12.0.yaml
+
+#Deploy
+kubectl apply -f k8s_keda_secret.yaml
+kubectl apply -f k8s_keda_trigger_auth.yaml
+kubectl apply -f k8s_producer_service.yaml
+kubectl apply -f k8s_producer_deployment.yaml
+kubectl apply -f k8s_consumer_deployment.yaml
+kubectl apply -f k8s_scaled_object.yaml
+
+
+# Para ver la IP asignada y acceder a http://[EXTERNAL-IP}:3000/swagger/index.html
+kubectl get service producer

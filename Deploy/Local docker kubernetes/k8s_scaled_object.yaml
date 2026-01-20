@@ -1,0 +1,18 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: consumer-queue-scaler
+spec:
+  scaleTargetRef:
+    name: consumer
+  pollingInterval: 5
+  cooldownPeriod: 30
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  triggers:
+  - type: azure-queue
+    authenticationRef:
+      name: azurite-auth
+    metadata:
+      queueName: jobs
+      queueLength: "5"
