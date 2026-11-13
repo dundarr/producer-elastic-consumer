@@ -41,8 +41,10 @@ kubectl -n default port-forward service/dashboard 8080:8080
 ## Ver el autoescalado
 
 1. Abre [el panel](http://localhost:8080). En otra terminal, ejecuta `kubectl -n default get deployment consumer --watch`.
-2. Aplica un ritmo de **30 msg/s** e inicia la producción. KEDA activa el primer consumidor cuando hay mensajes y usa **5 mensajes por réplica** como objetivo, hasta un máximo de 20 réplicas.
-3. Pausa la producción. Deja que la cola se vacíe y comprueba que el despliegue vuelve a cero después del período de enfriamiento de 30 segundos.
+2. Aplica un ritmo de **5 msg/s** e inicia la producción. El ritmo pide **3 consumidores** porque cada uno tiene un límite configurado de 2 msg/s. La cola puede pedir más réplicas si se acumula trabajo.
+3. Pausa la producción y deja que la cola se vacíe. KEDA vuelve a cero tras 60 segundos sin producción ni mensajes en cola.
+
+Kubernetes usa la mayor de las dos estimaciones de réplicas, con un máximo de 20. Divide el ritmo configurado entre 2 msg/s por consumidor y el recuento de la cola entre 5, redondeando hacia arriba. Una vez arrancada la primera réplica, puede añadir hasta dos cada 15 segundos. La reducción usa una ventana de estabilización de 30 segundos. Si cambias el límite del consumidor, actualiza `targetValue` en el escalador local.
 
 La gráfica usa el recuento aproximado de Azure Queue y los registros de actividad del consumidor. Las réplicas que informa Kubernetes pueden tardar unos segundos en aparecer en el panel. Consulta la [documentación del escalador de Azure Storage Queue](https://keda.sh/docs/2.18/scalers/azure-storage-queue/) para ver cómo se calcula el objetivo.
 

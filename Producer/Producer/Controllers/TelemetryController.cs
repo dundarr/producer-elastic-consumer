@@ -14,6 +14,11 @@ public class TelemetryController(
     IConsumerRegistry consumers,
     ILogger<TelemetryController> logger) : ControllerBase
 {
+    [HttpGet("/metrics/production-rate")]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public ProductionRateMetric GetProductionRate() =>
+        new(producer.IsRunning() ? producer.GetRate() : 0);
+
     [HttpGet]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<ActionResult<TelemetrySnapshot>> Get()
@@ -34,3 +39,5 @@ public class TelemetryController(
 }
 
 public record TelemetrySnapshot(int QueueLength, int ConsumerCount, bool IsRunning, int Rate, DateTimeOffset SampledAt);
+
+public record ProductionRateMetric(int MessagesPerSecond);
