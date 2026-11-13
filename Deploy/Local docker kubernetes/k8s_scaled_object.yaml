@@ -16,3 +16,4 @@ spec:
     metadata:
       queueName: jobs
       queueLength: "5"
+      activationQueueLength: "0"

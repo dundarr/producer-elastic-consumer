@@ -9,7 +9,7 @@ namespace Consumer.UnitTests
 {
     public class QueueConsumerWorkerProcessMessageTests
     {
-        private QueueConsumerWorker CreateWorker(IQueueClient queueClient, IMessageProcessor processor, int deadLetterThreshold = 5)
+        private QueueConsumerWorker CreateWorker(IQueueClient queueClient, IMessageProcessor processor, IQueueClient? deadLetterQueue = null, int deadLetterThreshold = 5)
         {
             var settings = new QueueSettings
             {
@@ -23,7 +23,7 @@ namespace Consumer.UnitTests
             var options = Options.Create(settings);
             var logger = NullLogger<QueueConsumerWorker>.Instance;
 
-            return new QueueConsumerWorker(logger, options, processor, queueClient);
+            return new QueueConsumerWorker(logger, options, processor, queueClient, deadLetterQueue ?? new FakeQueueClient());
         }
 
         private class StubProcessor : IMessageProcessor
@@ -43,8 +43,9 @@ namespace Consumer.UnitTests
             public string? DeletedMessageId;
             public string? DeletedPopReceipt;
             public string? SentMessage;
+            public bool FailSend;
 
-            public void CreateIfNotExists() { }
+            public Task CreateIfNotExistsAsync(CancellationToken ct) => Task.CompletedTask;
 
             public Task<SimpleQueueMessage?> ReceiveMessageAsync(TimeSpan visibilityTimeout, CancellationToken ct) => Task.FromResult<SimpleQueueMessage?>(null);
 
@@ -57,6 +58,9 @@ namespace Consumer.UnitTests
 
             public Task SendMessageAsync(string message, CancellationToken ct)
             {
+                if (FailSend)
+                    throw new InvalidOperationException("Storage unavailable");
+
                 SentMessage = message;
                 return Task.CompletedTask;
             }
@@ -92,17 +96,43 @@ namespace Consumer.UnitTests
         }
 
         [Fact]
-        public async Task ProcessMessage_FailureAtOrAboveThreshold_DeletesAndWouldMoveToDlq()
+        public async Task ProcessMessage_FailureAtOrAboveThreshold_MovesToDlqBeforeDeleting()
         {
             var fake = new FakeQueueClient();
             var processor = new StubProcessor(false);
-            var worker = CreateWorker(fake, processor, deadLetterThreshold: 2);
+            var deadLetterQueue = new FakeQueueClient();
+            var worker = CreateWorker(fake, processor, deadLetterQueue, deadLetterThreshold: 2);
 
             var message = new SimpleQueueMessage("id3", "pr3", "bad", 2);
 
             await worker.ProcessMessage(message, CancellationToken.None);
 
             Assert.Equal("id3", fake.DeletedMessageId);
+            Assert.Equal("bad", deadLetterQueue.SentMessage);
+        }
+
+        [Fact]
+        public async Task ProcessMessage_WhenDeadLetterWriteFails_KeepsOriginal()
+        {
+            var queue = new FakeQueueClient();
+            var deadLetterQueue = new FakeQueueClient { FailSend = true };
+            var worker = CreateWorker(queue, new StubProcessor(false), deadLetterQueue, deadLetterThreshold: 2);
+
+            await worker.ProcessMessage(new SimpleQueueMessage("id4", "pr4", "bad", 2), CancellationToken.None);
+
+            Assert.Null(queue.DeletedMessageId);
+        }
+
+        [Fact]
+        public async Task ProcessMessage_WhenCanceled_KeepsOriginal()
+        {
+            var queue = new FakeQueueClient();
+            var worker = CreateWorker(queue, new StubProcessor(true));
+
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                worker.ProcessMessage(new SimpleQueueMessage("id5", "pr5", "hello", 1), new CancellationToken(true)));
+
+            Assert.Null(queue.DeletedMessageId);
         }
     }
 }

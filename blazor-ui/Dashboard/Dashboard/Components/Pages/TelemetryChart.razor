@@ -1,0 +1,51 @@
+@using System.Globalization
+
+<div class="plot">
+    @if (Samples.Count < 2)
+    {
+        <p class="plot-empty">Esperando muestras de telemetría…</p>
+    }
+    else
+    {
+        <div class="axis-labels" aria-hidden="true">
+            <span>@QueueScale</span><span>@(QueueScale / 2)</span><span>0</span>
+        </div>
+        <svg viewBox="0 0 600 200" preserveAspectRatio="none" role="img"
+             aria-label="Historial de mensajes en cola y consumidores activos durante los últimos dos minutos">
+            <defs>
+                <linearGradient id="queue-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stop-color="#ff985f" stop-opacity=".32" />
+                    <stop offset="100%" stop-color="#ff985f" stop-opacity=".02" />
+                </linearGradient>
+            </defs>
+            <path d="M0 1H600 M0 100H600 M0 199H600 M150 0V200 M300 0V200 M450 0V200"
+                  fill="none" class="chart-grid" vector-effect="non-scaling-stroke" />
+            <path d="@QueueArea" fill="url(#queue-fill)" />
+            <polyline points="@Points(s => s.QueueLength, QueueScale)" fill="none" class="queue-line" vector-effect="non-scaling-stroke" />
+            <polyline points="@Points(s => s.ConsumerCount, ConsumerScale)" fill="none" class="consumer-line" vector-effect="non-scaling-stroke" />
+        </svg>
+        <div class="axis-labels axis-right" aria-hidden="true">
+            <span>@ConsumerScale</span><span>@(ConsumerScale / 2)</span><span>0</span>
+        </div>
+        <div class="time-axis" aria-hidden="true"><span>−2 min</span><span>−1 min</span><span>Ahora</span></div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<TelemetrySnapshot> Samples { get; set; } = [];
+
+    private long QueueScale => RoundScale(Samples.Max(s => s.QueueLength));
+    private long ConsumerScale => RoundScale(Samples.Max(s => s.ConsumerCount));
+
+    private string QueueArea => $"M{X(Samples[0])} 200 L{Points(s => s.QueueLength, QueueScale)} L600 200 Z";
+
+    private string Points(Func<TelemetrySnapshot, int> value, long scale) =>
+        string.Join(" ", Samples.Select(sample => $"{X(sample)},{Format(199 - 198.0 * value(sample) / scale)}"));
+
+    private string X(TelemetrySnapshot sample) =>
+        Format(600 - 5 * (Samples[^1].SampledAt - sample.SampledAt).TotalSeconds);
+
+    private static long RoundScale(int max) => Math.Max(4, ((long)max + 3) / 4 * 4);
+    private static string Format(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+}

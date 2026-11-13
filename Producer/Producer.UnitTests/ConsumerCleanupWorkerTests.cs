@@ -11,12 +11,10 @@ namespace Producer.UnitTests;
 public class ConsumerCleanupWorkerTests
 {
     private readonly Mock<IConsumerRegistry> _mockRegistry;
-    private readonly Mock<ILogger<ConsumerCleanupWorker>> _mockLogger;
 
     public ConsumerCleanupWorkerTests()
     {
         _mockRegistry = new Mock<IConsumerRegistry>();
-        _mockLogger = new Mock<ILogger<ConsumerCleanupWorker>>();
     }
 
     [Fact]
@@ -28,15 +26,15 @@ public class ConsumerCleanupWorkerTests
 
         var consumers = new Dictionary<Guid, DateTime>
         {
-            { activeConsumer, DateTime.Now }, // Active
-            { staleConsumer, DateTime.Now.AddSeconds(-15) } // Stale (older than 10 seconds)
+            { activeConsumer, DateTime.UtcNow }, // Active
+            { staleConsumer, DateTime.UtcNow.AddSeconds(-35) } // Stale (older than 30 seconds)
         }.ToFrozenDictionary();
 
         _mockRegistry
             .Setup(x => x.GetRegisteredAsync())
             .ReturnsAsync(consumers);
 
-        var worker = new ConsumerCleanupWorker(_mockRegistry.Object, _mockLogger.Object);
+        var worker = new ConsumerCleanupWorker(_mockRegistry.Object);
 
         using var cts = new CancellationTokenSource();
 
@@ -55,10 +53,10 @@ public class ConsumerCleanupWorkerTests
         }
 
         // Assert - stale consumer should be unregistered
-        _mockRegistry.Verify(x => x.UnregisterAsync(staleConsumer), Times.AtLeastOnce);
-        
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(staleConsumer, It.IsAny<DateTime>()), Times.AtLeastOnce);
+
         // Active consumer should NOT be unregistered
-        _mockRegistry.Verify(x => x.UnregisterAsync(activeConsumer), Times.Never);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(activeConsumer, It.IsAny<DateTime>()), Times.Never);
     }
 
     [Fact]
@@ -70,15 +68,15 @@ public class ConsumerCleanupWorkerTests
 
         var consumers = new Dictionary<Guid, DateTime>
         {
-            { activeConsumer1, DateTime.Now.AddSeconds(-5) },
-            { activeConsumer2, DateTime.Now.AddSeconds(-3) }
+            { activeConsumer1, DateTime.UtcNow.AddSeconds(-5) },
+            { activeConsumer2, DateTime.UtcNow.AddSeconds(-3) }
         }.ToFrozenDictionary();
 
         _mockRegistry
             .Setup(x => x.GetRegisteredAsync())
             .ReturnsAsync(consumers);
 
-        var worker = new ConsumerCleanupWorker(_mockRegistry.Object, _mockLogger.Object);
+        var worker = new ConsumerCleanupWorker(_mockRegistry.Object);
 
         using var cts = new CancellationTokenSource();
 
@@ -97,7 +95,7 @@ public class ConsumerCleanupWorkerTests
         }
 
         // Assert - no consumers should be unregistered
-        _mockRegistry.Verify(x => x.UnregisterAsync(It.IsAny<Guid>()), Times.Never);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(It.IsAny<Guid>(), It.IsAny<DateTime>()), Times.Never);
     }
 
     [Fact]
@@ -110,7 +108,7 @@ public class ConsumerCleanupWorkerTests
             .Setup(x => x.GetRegisteredAsync())
             .ReturnsAsync(emptyRegistry);
 
-        var worker = new ConsumerCleanupWorker(_mockRegistry.Object, _mockLogger.Object);
+        var worker = new ConsumerCleanupWorker(_mockRegistry.Object);
 
         using var cts = new CancellationTokenSource();
 
@@ -133,9 +131,9 @@ public class ConsumerCleanupWorkerTests
 
         // Assert - should not throw
         await act.Should().NotThrowAsync();
-        
+
         // No unregister calls should be made
-        _mockRegistry.Verify(x => x.UnregisterAsync(It.IsAny<Guid>()), Times.Never);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(It.IsAny<Guid>(), It.IsAny<DateTime>()), Times.Never);
     }
 
     [Fact]
@@ -149,17 +147,17 @@ public class ConsumerCleanupWorkerTests
 
         var consumers = new Dictionary<Guid, DateTime>
         {
-            { activeConsumer, DateTime.Now },
-            { staleConsumer1, DateTime.Now.AddSeconds(-12) },
-            { staleConsumer2, DateTime.Now.AddSeconds(-20) },
-            { staleConsumer3, DateTime.Now.AddSeconds(-30) }
+            { activeConsumer, DateTime.UtcNow },
+            { staleConsumer1, DateTime.UtcNow.AddSeconds(-32) },
+            { staleConsumer2, DateTime.UtcNow.AddSeconds(-40) },
+            { staleConsumer3, DateTime.UtcNow.AddSeconds(-60) }
         }.ToFrozenDictionary();
 
         _mockRegistry
             .Setup(x => x.GetRegisteredAsync())
             .ReturnsAsync(consumers);
 
-        var worker = new ConsumerCleanupWorker(_mockRegistry.Object, _mockLogger.Object);
+        var worker = new ConsumerCleanupWorker(_mockRegistry.Object);
 
         using var cts = new CancellationTokenSource();
 
@@ -178,12 +176,12 @@ public class ConsumerCleanupWorkerTests
         }
 
         // Assert - all stale consumers should be unregistered
-        _mockRegistry.Verify(x => x.UnregisterAsync(staleConsumer1), Times.AtLeastOnce);
-        _mockRegistry.Verify(x => x.UnregisterAsync(staleConsumer2), Times.AtLeastOnce);
-        _mockRegistry.Verify(x => x.UnregisterAsync(staleConsumer3), Times.AtLeastOnce);
-        
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(staleConsumer1, It.IsAny<DateTime>()), Times.AtLeastOnce);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(staleConsumer2, It.IsAny<DateTime>()), Times.AtLeastOnce);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(staleConsumer3, It.IsAny<DateTime>()), Times.AtLeastOnce);
+
         // Active consumer should NOT be unregistered
-        _mockRegistry.Verify(x => x.UnregisterAsync(activeConsumer), Times.Never);
+        _mockRegistry.Verify(x => x.RemoveIfUnchanged(activeConsumer, It.IsAny<DateTime>()), Times.Never);
     }
 
     [Fact]
@@ -196,7 +194,7 @@ public class ConsumerCleanupWorkerTests
             .Setup(x => x.GetRegisteredAsync())
             .ReturnsAsync(consumers);
 
-        var worker = new ConsumerCleanupWorker(_mockRegistry.Object, _mockLogger.Object);
+        var worker = new ConsumerCleanupWorker(_mockRegistry.Object);
 
         using var cts = new CancellationTokenSource();
 

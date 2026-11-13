@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: azurite
-          image: mcr.microsoft.com/azure-storage/azurite:latest
+          image: mcr.microsoft.com/azure-storage/azurite:3.37.0
           imagePullPolicy: IfNotPresent
           args:
             - azurite
@@ -26,6 +26,7 @@ spec:
             - 0.0.0.0
             - --tableHost
             - 0.0.0.0
+            - --disableProductStyleUrl
             - --location
             - /data
             - --debug

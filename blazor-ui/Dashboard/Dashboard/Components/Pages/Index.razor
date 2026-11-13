@@ -1,143 +1,250 @@
-﻿@page "/"
+@page "/"
 @using System.Globalization
-@using Producer.Dashboard.Services
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject ProducerService Producer
 @inject IConfiguration Config
-@implements IDisposable
+@inject ILogger<Index> Logger
+@implements IAsyncDisposable
 
-<div class="vintage-container">
-    <div class="panel-header">
-        <h2>TELEMETRY UNIT - V1950</h2>
-    </div>
+<PageTitle>Queue Lab | KEDA</PageTitle>
 
-    <div class="row mt-4 text-center">
-        <div class="col-md-3">
-            <label class="d-block mb-2">POWER </label>
-            <div class="d-flex flex-column align-items-center">
-                <div class="toggle-switch @(isRunning ? "up" : "down")" @onclick="ToggleProducer">
-                    <div class="handle"></div>
-                </div>
-            </div>
+<div class="dashboard">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>QUEUE<span class="brand-accent">/</span>LAB</span>
         </div>
-        <div class="col-md-3">
-            <label class="d-block mb-2">STATE</label>
-            <div class="d-flex flex-column align-items-center">
-                <span class="mt-2">@(isRunning ? "ACTIVE" : "OFF")</span>
-            </div>
-        </div>
+        <span class="connection @(_online ? "online" : "")" role="status">
+            <i></i>@(_online ? "En directo" : _pollError ? "Sin conexión" : "Conectando")
+        </span>
+    </header>
 
-        <div class="col-md-6">
-            <label class="d-block mb-2">FLOW VELOCITY (-50 to +50)</label>
-            <svg viewBox="0 0 100 60" style="max-width: 300px;">
-                <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#555" stroke-width="5" />
-                <line x1="50" y1="50" x2="@NeedleX" y2="@NeedleY" stroke="#e74c3c" stroke-width="2" />
-                <circle cx="50" cy="50" r="3" fill="#ecf0f1" />
-            </svg>
-            <div class="mt-2" style="color:#e74c3c">SPEED: @currentSpeed.ToString("F2")</div>
-        </div>
-
-        <div class="col-md-3">
-            <div class="mb-4">
-                <label class="d-block">CONSUMERS</label>
-                <div class="nixie-tube small">@consumerCount</div>
-            </div>
+    <main>
+        <section class="intro" aria-labelledby="page-title">
             <div>
-                <label class="d-block">QUEUE MSG</label>
-                <div class="nixie-tube small">@queueLength</div>
+                <p class="eyebrow"><span></span> KUBERNETES / KEDA</p>
+                <h1 id="page-title">Autoescalado<br />por cola<span>.</span></h1>
             </div>
-        </div>
-    </div>
+            <p class="intro-copy">Ajusta el ritmo de producción y observa cómo responden los consumidores a la carga.</p>
+        </section>
 
-    <hr style="border-color: #444" />
+        @if (_pollError)
+        {
+            <div class="notice" role="status">
+                No se puede leer la telemetría. @(_snapshot is null ? "Reintentando…" : "Mostrando la última muestra recibida.")
+            </div>
+        }
 
-    <div class="row align-items-center justify-content-center">
-        <div class="col-md-4 text-center">
-            <label class="d-block">CURRENT RATE</label>
-            <div class="nixie-tube">@currentRate</div>
+        <div class="metrics" aria-label="Métricas actuales">
+            <article class="metric queue">
+                <h2><span></span> Mensajes en cola</h2>
+                <p>@Display(_snapshot?.QueueLength)</p>
+                <small>Recuento aproximado de Azure Queue</small>
+            </article>
+            <article class="metric consumers">
+                <h2><span></span> Consumidores activos</h2>
+                <p>@Display(_snapshot?.ConsumerCount)</p>
+                <small>Según el último registro de actividad</small>
+            </article>
+            <article class="metric flow">
+                <h2><span></span> Variación de la cola</h2>
+                <p>@FlowLabel <small>msg/s</small></p>
+                <small>@(Flow is > 0 ? "La cola crece" : Flow is < 0 ? "La cola se vacía" : Flow is 0 ? "Sin cambios entre muestras" : "Pendiente de dos muestras")</small>
+            </article>
         </div>
-        <div class="col-md-4 text-center">
-            <label class="d-block">ADJUST RATE</label>
-            <input type="number"
-                   @bind-value="newRateValue"
-                   @bind-value:event="oninput"
-                   class="vintage-input" />
-            <button type="button" @onclick="UpdateRate" class="metal-button ms-2">COMMIT</button>
+
+        <div class="workspace">
+            <section class="panel history" aria-labelledby="history-title">
+                <header class="panel-heading">
+                    <div>
+                        <p class="eyebrow">TELEMETRÍA</p>
+                        <h2 id="history-title">Historial de carga</h2>
+                    </div>
+                    <span class="tag">Últimos 2 min</span>
+                </header>
+
+                <TelemetryChart Samples="_history" />
+
+                <div class="chart-footer">
+                    <span><i class="key queue-key"></i> Cola</span>
+                    <span><i class="key consumer-key"></i> Consumidores</span>
+                    @if (_snapshot is { } latest)
+                    {
+                        <span class="sample-time">UTC @latest.SampledAt.UtcDateTime.ToString("HH:mm:ss")</span>
+                    }
+                </div>
+            </section>
+
+            <section class="panel controls" aria-labelledby="control-title">
+                <header class="panel-heading">
+                    <div>
+                        <p class="eyebrow">CONTROL</p>
+                        <h2 id="control-title">Productor</h2>
+                    </div>
+                    <span class="tag @(_snapshot?.IsRunning == true ? "running" : "")">
+                        @(_snapshot is null ? "Sin datos" : _snapshot.IsRunning ? "Activo" : "Pausado")
+                    </span>
+                </header>
+
+                <div class="rate-readout">
+                    <span>Ritmo configurado</span>
+                    <strong>@Display(_snapshot?.Rate) <small>msg/s</small></strong>
+                </div>
+
+                <form @onsubmit="UpdateRateAsync" @onsubmit:preventDefault>
+                    <label for="rate">Nuevo ritmo <span>msg/s</span></label>
+                    <div class="rate-form">
+                        <input id="rate" type="number" min="1" step="1" required placeholder="@(_snapshot?.Rate.ToString() ?? "1")"
+                               @bind="_rateInput" @bind:event="oninput" disabled="@ControlsDisabled" />
+                        <button class="secondary" type="submit" disabled="@(ControlsDisabled || _rateInput is null or < 1)">Aplicar</button>
+                    </div>
+                </form>
+
+                <button class="primary" type="button" @onclick="ToggleAsync" disabled="@ControlsDisabled">
+                    <span aria-hidden="true">@(_snapshot?.IsRunning == true ? "Ⅱ" : "▶")</span>
+                    @(_snapshot?.IsRunning == true ? "Pausar producción" : "Iniciar producción")
+                </button>
+                @if (_actionError is not null)
+                {
+                    <p class="action-error" role="alert">@_actionError</p>
+                }
+            </section>
         </div>
-    </div>
+    </main>
 </div>
 
 @code {
-    private bool isRunning;
-    private double currentSpeed;
-    private int currentRate;
-    private int newRateValue;
-    private int consumerCount;
-    private long queueLength;
-    private System.Threading.Timer? _timer;
+    private static readonly CultureInfo DisplayCulture = CultureInfo.GetCultureInfo("es-ES");
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly SemaphoreSlim _requests = new(1);
+    private readonly List<TelemetrySnapshot> _history = [];
+    private TelemetrySnapshot? _snapshot;
+    private Task? _polling;
+    private int? _rateInput;
+    private bool _online;
+    private bool _pollError;
+    private bool _busy;
+    private string? _actionError;
 
-    // Propiedades calculadas para el SVG con Culture Invariant
-    private string NeedleX => (50 + 35 * Math.Cos(CalculateAngle())).ToString(CultureInfo.InvariantCulture);
-    private string NeedleY => (50 - 35 * Math.Sin(CalculateAngle())).ToString(CultureInfo.InvariantCulture);
+    private bool ControlsDisabled => !_online || _busy;
 
-    private double CalculateAngle()
+    private double? Flow
     {
-        double clamped = Math.Clamp(currentSpeed, -50, 50);
-        double percent = (clamped + 50) / 100;
-        return Math.PI * (1 - percent);
+        get
+        {
+            if (_history.Count < 2 || !_online)
+                return null;
+
+            var current = _history[^1];
+            var previous = _history[^2];
+            var seconds = (current.SampledAt - previous.SampledAt).TotalSeconds;
+            return seconds > 0 ? (current.QueueLength - previous.QueueLength) / seconds : null;
+        }
     }
 
-    protected override async Task OnInitializedAsync()
+    private string FlowLabel => Flow?.ToString("+0.0;-0.0;0.0", DisplayCulture) ?? "—";
+    private static string Display(int? value) => value?.ToString("N0", DisplayCulture) ?? "—";
+
+    protected override void OnInitialized() => _polling = PollAsync(_lifetime.Token);
+
+    private async Task PollAsync(CancellationToken ct)
     {
-        await RefreshData();
-        int interval = Config.GetValue<int>("ProducerApi:PollingIntervalSeconds", 2);
-        _timer = new System.Threading.Timer(async _ => await InvokeAsync(RefreshData), null, 0, interval * 1000);
+        var interval = Math.Clamp(Config.GetValue("ProducerApi:PollingIntervalSeconds", 2), 1, 30);
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(interval));
+        try
+        {
+            do
+            {
+                await _requests.WaitAsync(ct);
+                try
+                {
+                    await RefreshAsync(ct);
+                }
+                finally
+                {
+                    _requests.Release();
+                }
+                StateHasChanged();
+            }
+            while (await timer.WaitForNextTickAsync(ct));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
     }
 
-    private async Task RefreshData()
+    private async Task RefreshAsync(CancellationToken ct)
     {
         try
         {
-            isRunning = await Producer.IsRunningAsync();
-            currentSpeed = await Producer.GetSpeedAsync();
-            currentRate = await Producer.GetRateAsync();
-            consumerCount = await Producer.GetConsumerCountAsync();
-            queueLength = await Producer.GetQueueLengthAsync();
-            StateHasChanged();
+            var snapshot = await Producer.GetSnapshotAsync(ct);
+            _snapshot = snapshot;
+            if (_history.Count > 0 && snapshot.SampledAt <= _history[^1].SampledAt)
+                _history.Clear();
+
+            _history.Add(snapshot);
+            _history.RemoveAll(sample => sample.SampledAt < snapshot.SampledAt.AddMinutes(-2));
+            _online = true;
+            _pollError = false;
         }
-        catch { /* Handle disconnection */ }
-    }
-
-    private async Task ToggleProducer()
-    {
-        if (isRunning) await Producer.StopAsync();
-        else await Producer.StartAsync();
-        await RefreshData();
-    }
-
-    private async Task UpdateRate()
-    {
-        if (newRateValue < 0)
+        catch (Exception ex) when (!ct.IsCancellationRequested &&
+            ex is HttpRequestException or OperationCanceledException or System.Text.Json.JsonException)
         {
-            Console.WriteLine("Valor de rate inválido (negativo)");
+            if (!_pollError)
+                Logger.LogWarning(ex, "Could not refresh producer telemetry");
+            _online = false;
+            _pollError = true;
+        }
+    }
+
+    private Task ToggleAsync() => _snapshot is { } snapshot
+        ? ApplyAsync(ct => Producer.SetRunningAsync(!snapshot.IsRunning, ct))
+        : Task.CompletedTask;
+
+    private Task UpdateRateAsync() => _rateInput is > 0 and var rate
+        ? ApplyAsync(ct => Producer.SetRateAsync(rate, ct))
+        : Task.CompletedTask;
+
+    private async Task ApplyAsync(Func<CancellationToken, Task> action)
+    {
+        if (ControlsDisabled)
             return;
-        }
 
+        _busy = true;
+        _actionError = null;
+        var ct = _lifetime.Token;
         try
         {
-            Console.WriteLine($"Enviando rate: {newRateValue}");
-            await Producer.SetRateAsync(newRateValue);
-            
-            await Task.Delay(100);
-            await RefreshData();
-            
-            Console.WriteLine("Rate actualizado correctamente");
+            await _requests.WaitAsync(ct);
+            try
+            {
+                await action(ct);
+                await RefreshAsync(ct);
+            }
+            finally
+            {
+                _requests.Release();
+            }
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            Console.WriteLine($"Error enviando rate: {ex.Message}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Could not change producer settings");
+            _actionError = "No se pudo aplicar el cambio. Vuelve a intentarlo.";
+        }
+        finally
+        {
+            _busy = false;
         }
     }
 
-    public void Dispose() => _timer?.Dispose();
+    public async ValueTask DisposeAsync()
+    {
+        await _lifetime.CancelAsync();
+        if (_polling is not null)
+            await _polling;
+        _lifetime.Dispose();
+    }
 }

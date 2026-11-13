@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Frozen;
 using System.Threading.Tasks;
 
@@ -8,6 +8,7 @@ namespace Producer.Services
     {
         Task RegisterAsync(Guid consumerId);
         Task UnregisterAsync(Guid consumerId);
+        void RemoveIfUnchanged(Guid consumerId, DateTime heartbeat);
         Task<FrozenDictionary<Guid, DateTime>> GetRegisteredAsync();
     }
 

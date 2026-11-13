@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Threading.Tasks;
@@ -21,7 +21,7 @@ public class ConsumerRegistry : IConsumerRegistry
     public Task RegisterAsync(Guid consumerId)
     {
         // Indexer assignment is atomic in ConcurrentDictionary
-        _consumers[consumerId] = DateTime.Now;
+        _consumers[consumerId] = DateTime.UtcNow;
         return Task.CompletedTask;
     }
 
@@ -35,6 +35,9 @@ public class ConsumerRegistry : IConsumerRegistry
         _consumers.TryRemove(consumerId, out _);
         return Task.CompletedTask;
     }
+
+    public void RemoveIfUnchanged(Guid consumerId, DateTime heartbeat) =>
+        _consumers.TryRemove(new System.Collections.Generic.KeyValuePair<Guid, DateTime>(consumerId, heartbeat));
 
     /// <summary>
     /// Returns a snapshot of all registered consumers as an immutable FrozenDictionary.

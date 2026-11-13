@@ -13,6 +13,7 @@ public class JsonMessageProcessor : IMessageProcessor
 
     public Task<bool> ProcessAsync(string messageText, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             // deserialize into a concrete type or handle generically
@@ -21,7 +22,7 @@ public class JsonMessageProcessor : IMessageProcessor
             // business logic here...
             return Task.FromResult(true);
         }
-        catch (Exception ex)
+        catch (JsonException ex)
         {
             _logger.LogError(ex, "Message processing failed");
             // decide whether this is transient or permanent

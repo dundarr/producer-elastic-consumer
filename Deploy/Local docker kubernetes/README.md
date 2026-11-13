@@ -1,116 +1,55 @@
-# Local Kubernetes Demo: Azurite + KEDA + Queue-Based Scaling
+# Demo local de Kubernetes con Azurite y KEDA
 
-This project demonstrates event-driven autoscaling using:
-- **Azurite** as a local Azure Storage Queue emulator
-- **KEDA** to scale a consumer application based on Azure Queue length
-- A **producer** service (exposed externally) to enqueue messages
-- A **consumer** deployment that scales from 0 to 20 replicas based on the `jobs` queue
+Usa un clúster local con Docker Desktop o Kind. Comprueba el contexto antes de aplicar los manifiestos.
 
-Everything is designed to run on a **local Kubernetes cluster** using **Docker Desktop** (or any single-node Kubernetes provided by Docker).
-
-## Prerequisites
-
-- Docker Desktop with Kubernetes enabled
-- `kubectl` configured to use the local cluster (e.g., `docker-desktop` context)
-- KEDA **not** pre-installed (instructions below will install it)
-
-## Step 1: Install KEDA
-
-KEDA is required for the `ScaledObject` and `TriggerAuthentication` resources.
-
-```bash
-kubectl apply -f https://github.com/kedacore/keda/releases/latest/download/keda.yaml
-
-Wait until all pods in the keda namespace are running:
-
-kubectl get pods -n keda
+```powershell
+kubectl config current-context
 ```
 
-## Step 2: Apply the manifests
+## Preparar las imágenes
 
-Apply the YAML files in the following order:
-```bash
-# 1. Azurite (storage emulator)
-kubectl apply -f k8s_azurite_deployment.yaml
-kubectl apply -f k8s_azurite_service.yaml
+Desde la raíz del repositorio:
 
-# 2. Connection secret and KEDA authentication
-kubectl apply -f k8s_keda_secret.yaml
-kubectl apply -f k8s_keda_trigger_auth.yaml
-
-# 3. Service alias in KEDA namespace (needed for connection string resolution)
-kubectl apply -f k8s_keda_alias_for_azurite.yaml
-
-# 4. Producer (enqueues messages)
-kubectl apply -f k8s_producer_deployment.yaml
-kubectl apply -f k8s_producer_service.yaml
-
-# 5. Consumer (scaled by KEDA)
-kubectl apply -f k8s_consumer_deployment.yaml
-
-# 6. KEDA ScaledObject (the actual scaler)
-kubectl apply -f k8s_scaled_object.yaml
+```powershell
+docker build --provenance=false -t producer:latest Producer
+docker build --provenance=false -t consumer:latest Consumer
+docker build --provenance=false -t dashboard:latest blazor-ui
 ```
 
-## Step 3: Verify the deployment
+Si usas Kind, carga las imágenes en el clúster. Sustituye `<nombre>` por el nombre del clúster.
 
-```bash
-kubectl get all -A | grep -E "azurite|producer|consumer|keda"
+```powershell
+kind load docker-image --name <nombre> producer:latest consumer:latest dashboard:latest
 ```
 
-You should see:
+## Instalar KEDA y desplegar
 
-azurite pod running
-producer pod running
-consumer deployment with 0 replicas initially
-KEDA pods in the keda name
+Si el clúster todavía no tiene KEDA, instala la versión utilizada para la demo y espera a que arranque.
 
-## Step 4: Test the setup
-
-### Access the Producer
-
-The producer is exposed on 3000:
-
-Open
-```bash
-http://localhost:3000/swagger/index.html
-```
-in your browser.
-Use the producer's API/UI to enqueue messages into the jobs queue (endpoint depends on your producer implementation).
-
-### Observe scaling
-Watch the consumer scale:
-
-```bash
-kubectl get deployment consumer --watch
+```powershell
+kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.18.2/keda-2.18.2.yaml
+kubectl -n keda wait --for=condition=Available deployment --all --timeout=180s
 ```
 
-When the jobs queue has 5 or more messages, KEDA will scale the consumer up. When the queue is empty, it scales back to 0.
+Aplica los manifiestos en el espacio de nombres `default`. La conexión a Azurite utiliza el nombre DNS del servicio en ese espacio de nombres.
 
-## Cleanup
-
-Remove everything (in reverse order):
-```bash
-kubectl delete -f k8s_scaled_object.yaml
-kubectl delete -f k8s_consumer_deployment.yaml
-kubectl delete -f k8s_producer_deployment.yaml
-kubectl delete -f k8s_producer_service.yaml
-kubectl delete -f k8s_keda_trigger_auth.yaml
-kubectl delete -f k8s_keda_secret.yaml
-kubectl delete -f k8s_keda_alias_for_azurite.yaml
-kubectl delete -f k8s_azurite_service.yaml
-kubectl delete -f k8s_azurite_deployment.yaml
+```powershell
+kubectl -n default apply -f "Deploy/Local docker kubernetes"
+kubectl -n default port-forward service/dashboard 8080:8080
 ```
 
-## Important notes
+## Ver el autoescalado
 
-The connection string uses the service name azurite. The alias in the keda namespace ensures KEDA can resolve it correctly.
-Azurite data is stored in an emptyDir volume → data is lost if the pod restarts.
-Consumer starts at 0 replicas to demonstrate true scale-from-zero.
-Images producer:latest and consumer:latest must be built and available locally or in a reachable registry.
+1. Abre [el panel](http://localhost:8080). En otra terminal, ejecuta `kubectl -n default get deployment consumer --watch`.
+2. Aplica un ritmo de **30 msg/s** e inicia la producción. KEDA activa el primer consumidor cuando hay mensajes y usa **5 mensajes por réplica** como objetivo, hasta un máximo de 20 réplicas.
+3. Pausa la producción. Deja que la cola se vacíe y comprueba que el despliegue vuelve a cero después del período de enfriamiento de 30 segundos.
 
-Sometimes I needed to execute :
-```bash
-kubectl rollout restart deploy/keda-operator -n keda
+La gráfica usa el recuento aproximado de Azure Queue y los registros de actividad del consumidor. Las réplicas que informa Kubernetes pueden tardar unos segundos en aparecer en el panel. Consulta la [documentación del escalador de Azure Storage Queue](https://keda.sh/docs/2.18/scalers/azure-storage-queue/) para ver cómo se calcula el objetivo.
+
+## Limpiar la demo
+
+```powershell
+kubectl -n default delete -f "Deploy/Local docker kubernetes"
 ```
-as it seems keda-operator kind of hangs sometimes.
+
+Azurite usa almacenamiento temporal. Al eliminar su pod se borran los mensajes de la demo.

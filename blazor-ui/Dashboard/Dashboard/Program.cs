@@ -1,10 +1,12 @@
 using Dashboard.Components;
-using Producer.Dashboard.Services;
+using Dashboard;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpClient<ProducerService>(client =>
 {
-    client.BaseAddress = new Uri(builder.Configuration["ProducerApi:BaseUrl"]);
+    var baseUrl = builder.Configuration["ProducerApi:BaseUrl"] ?? "http://localhost:3000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(8);
 });
 
 // Add services to the container.
@@ -21,7 +23,7 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
+
 
 app.UseAntiforgery();
 

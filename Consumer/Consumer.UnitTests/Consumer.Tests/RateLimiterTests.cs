@@ -1,3 +1,4 @@
+using Azure.Storage.Queues;
 using Consumer.Configuration;
 using Consumer.Services;
 using Consumer.Workers;
@@ -24,7 +25,8 @@ namespace Consumer.UnitTests
             // simple stub IMessageProcessor
             IMessageProcessor processor = new StubProcessor();
 
-            return new QueueConsumerWorker(logger, options, processor);
+            var client = new AzureQueueClientWrapper(new QueueClient(settings.ConnectionString, settings.Name));
+            return new QueueConsumerWorker(logger, options, processor, client, client);
         }
 
         [Fact]

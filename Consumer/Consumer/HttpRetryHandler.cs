@@ -1,65 +1,32 @@
-namespace Consumer
+using System.Net;
+
+namespace Consumer;
+
+public class HttpRetryHandler(ILogger<HttpRetryHandler> logger) : DelegatingHandler
 {
-    // Simple delegating handler implementing exponential backoff + jitter for HTTP requests.
-    // Keep small and explicit so it's easy to replace later with Microsoft.Extensions.Http.Resilience.
-    public class HttpRetryHandler : DelegatingHandler
+    private const int MaxRetries = 3;
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        private readonly ILogger<HttpRetryHandler> _logger;
-        private readonly int _maxRetries = 3;
-        private readonly TimeSpan _baseDelay = TimeSpan.FromSeconds(1);
-        private readonly Random _jitterer = new();
-
-        public HttpRetryHandler(ILogger<HttpRetryHandler> logger)
+        for (var retry = 0; ; retry++)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            int attempt = 0;
-
-            while (true)
+            try
             {
-                try
-                {
-                    var response = await base.SendAsync(request, cancellationToken);
-                    if (response.IsSuccessStatusCode)
-                        return response;
+                var response = await base.SendAsync(request, ct);
+                var transient = response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
+                    || (int)response.StatusCode >= 500;
+                if (!transient || retry == MaxRetries)
+                    return response;
 
-                    // treat non-success as transient for retries
-                    attempt++;
-                    if (attempt > _maxRetries)
-                        return response;
-
-                    var delay = GetDelay(attempt);
-                    _logger.LogWarning("HTTP request failed with status {Status}. Retrying {Attempt}/{Max} after {Delay}.",
-                        response.StatusCode, attempt, _maxRetries, delay);
-
-                    await Task.Delay(delay, cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    attempt++;
-                    if (attempt > _maxRetries)
-                        throw;
-
-                    var delay = GetDelay(attempt);
-                    _logger.LogWarning(ex, "HTTP request exception. Retrying {Attempt}/{Max} after {Delay}.", attempt, _maxRetries, delay);
-                    await Task.Delay(delay, cancellationToken);
-                }
+                logger.LogDebug("Retrying heartbeat after HTTP {Status}", response.StatusCode);
+                response.Dispose();
             }
-        }
+            catch (HttpRequestException ex) when (retry < MaxRetries)
+            {
+                logger.LogDebug(ex, "Retrying heartbeat after a connection error");
+            }
 
-        private TimeSpan GetDelay(int attempt)
-        {
-            // exponential backoff * base + jitter (ms)
-            var expo = Math.Pow(2, attempt);
-            var jitterMs = _jitterer.Next(0, 300);
-            return TimeSpan.FromMilliseconds(expo * _baseDelay.TotalMilliseconds) + TimeSpan.FromMilliseconds(jitterMs);
+            await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << retry) + Random.Shared.Next(300)), ct);
         }
     }
 }

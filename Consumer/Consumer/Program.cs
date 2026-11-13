@@ -5,76 +5,52 @@ using Consumer.Services;
 using Consumer.Workers;
 using Microsoft.Extensions.Options;
 
-var builder = Host.CreateDefaultBuilder(args)
-    .ConfigureAppConfiguration((context, config) =>
-    {
-        var env = context.HostingEnvironment;
-        
-        // Load base configuration
-        config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
-        
-        // Load environment-specific configuration (e.g., appsettings.Docker.json)
-        var envSpecificFile = $"appsettings.{env.EnvironmentName}.json";
-        config.AddJsonFile(envSpecificFile, optional: true, reloadOnChange: true);
-        
-        // Environment variables take precedence
-        config.AddEnvironmentVariables();
-    })
-    .ConfigureServices((context, services) =>
-    {
-        // Log which configuration files are being used
-        var logger = LoggerFactory.Create(builder => builder.AddConsole()).CreateLogger("Configuration");
-        logger.LogInformation("Environment: {Environment}", context.HostingEnvironment.EnvironmentName);
-        logger.LogInformation("Configuration file: appsettings.json");
-        logger.LogInformation("Environment-specific file: appsettings.{Environment}.json", context.HostingEnvironment.EnvironmentName);
-        
-        var queueConnectionString = context.Configuration.GetSection("Queue")["ConnectionString"];
-        logger.LogInformation("Queue ConnectionString (first 50 chars): {ConnectionString}", 
-            queueConnectionString?.Length > 50 ? queueConnectionString[..50] + "..." : queueConnectionString);
+var builder = Host.CreateApplicationBuilder(args);
 
-        services.AddOptions<QueueSettings>()
-            .Bind(context.Configuration.GetSection("Queue"))
-            .Validate(s => s.VisibilityTimeoutSeconds > 0, "VisibilityTimeoutSeconds must be > 0");
+builder.Services.AddOptions<QueueSettings>()
+    .BindConfiguration("Queue")
+    .Validate(s => !string.IsNullOrWhiteSpace(s.ConnectionString) && !string.IsNullOrWhiteSpace(s.Name),
+        "Queue connection and name are required.")
+    .Validate(s => s.VisibilityTimeoutSeconds > 0, "VisibilityTimeoutSeconds must be positive.")
+    .Validate(s => double.IsFinite(s.FixedConsumptionRatePerSecond) && s.FixedConsumptionRatePerSecond >= 0,
+        "FixedConsumptionRatePerSecond must be finite and nonnegative.")
+    .ValidateOnStart();
 
-        services.AddOptions<ProducerApiSettings>()
-            .Bind(context.Configuration.GetSection("ProducerApi"))
-            .Validate(s => !string.IsNullOrEmpty(s.BaseUrl));
+builder.Services.AddOptions<ProducerApiSettings>()
+    .BindConfiguration("ProducerApi")
+    .Validate(s => Uri.TryCreate(s.BaseUrl, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps),
+        "ProducerApi:BaseUrl must be an HTTP(S) URL.")
+    .ValidateOnStart();
 
-        // Register QueueClient instances from configuration (testable)
-        services.AddSingleton(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<QueueSettings>>().Value;
-            return new QueueClient(opts.ConnectionString, opts.Name);
-        });
+builder.Services.AddSingleton<IQueueClient>(sp =>
+{
+    var settings = sp.GetRequiredService<IOptions<QueueSettings>>().Value;
+    return new AzureQueueClientWrapper(new QueueClient(settings.ConnectionString, settings.Name));
+});
 
-        // Optional: dead-letter queue client
-        services.AddSingleton(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<QueueSettings>>().Value;
-            var dlqName = string.IsNullOrWhiteSpace(opts.DeadLetterQueueName) ? opts.Name + "-dlq" : opts.DeadLetterQueueName;
-            return new QueueClient(opts.ConnectionString, dlqName);
-        });
+builder.Services.AddKeyedSingleton<IQueueClient>("dead-letter", (sp, _) =>
+{
+    var settings = sp.GetRequiredService<IOptions<QueueSettings>>().Value;
+    var name = string.IsNullOrWhiteSpace(settings.DeadLetterQueueName)
+        ? settings.Name + "-dlq"
+        : settings.DeadLetterQueueName;
+    if (string.Equals(name, settings.Name, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("The dead-letter queue must differ from the input queue.");
 
-        // Register message processor (decoupled from worker)
-        services.AddSingleton<IMessageProcessor, JsonMessageProcessor>();
+    return new AzureQueueClientWrapper(new QueueClient(settings.ConnectionString, name));
+});
 
-        // Register an HttpMessageHandler that implements retry + jitter for outgoing HTTP requests
-        services.AddTransient<HttpRetryHandler>();
+builder.Services.AddSingleton<IMessageProcessor, JsonMessageProcessor>();
+builder.Services.AddTransient<HttpRetryHandler>();
+builder.Services.AddHttpClient("ApiClient", (sp, client) =>
+{
+    var settings = sp.GetRequiredService<IOptions<ProducerApiSettings>>().Value;
+    client.BaseAddress = new Uri(settings.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(8);
+}).AddHttpMessageHandler<HttpRetryHandler>();
 
-        services.AddHostedService<QueueConsumerWorker>();
-        services.AddHostedService<HeartbeatWorker>();
+builder.Services.AddHostedService<QueueConsumerWorker>();
+builder.Services.AddHostedService<HeartbeatWorker>();
 
-        // Typed HttpClient with our handler (retry logic moved to handler)
-        services.AddHttpClient("ApiClient", client =>
-        {
-            var baseUrl = context.Configuration
-                .GetSection("ProducerApi")
-                .Get<ProducerApiSettings>()?
-                .BaseUrl ?? string.Empty;
-
-            client.BaseAddress = new Uri(baseUrl);
-        })
-        .AddHttpMessageHandler<HttpRetryHandler>();
-    });
-
-builder.Build().Run();
+await builder.Build().RunAsync();

@@ -15,6 +15,7 @@ spec:
       containers:
       - name: consumer
         image: consumer:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: "DOTNET_ENVIRONMENT"
           value: "Kubernetes"
@@ -22,5 +23,4 @@ spec:
           valueFrom:
             secretKeyRef:
               name: azurite-connection # Nombre del secret de KEDA
-              key: connection     
-        
+              key: connection

@@ -15,6 +15,7 @@ spec:
       containers:
       - name: producer
         image: producer:latest
+        imagePullPolicy: IfNotPresent
         env:
         - name: "DOTNET_ENVIRONMENT"
           value: "Kubernetes"
@@ -25,4 +26,3 @@ spec:
               key: connection          # Clave definida en k8s_keda_secret.yaml
         ports:
         - containerPort: 3000
-                

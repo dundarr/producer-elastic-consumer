@@ -1,7 +1,8 @@
-﻿namespace Dashboard
-{
-    public record StatusDto(string? Status);
-    public record RateDto(int Rate);
-    public record QueueLengthDto(long QueueLength, DateTime Timestamp);
-    public record QueueSpeedDto(double QueueSpeed, DateTime Timestamp);
-}
+namespace Dashboard;
+
+public record TelemetrySnapshot(
+    int QueueLength,
+    int ConsumerCount,
+    bool IsRunning,
+    int Rate,
+    DateTimeOffset SampledAt);
