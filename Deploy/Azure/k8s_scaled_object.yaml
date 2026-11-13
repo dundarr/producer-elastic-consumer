@@ -6,14 +6,32 @@ spec:
   scaleTargetRef:
     name: consumer
   pollingInterval: 5
-  cooldownPeriod: 30
+  cooldownPeriod: 60
   minReplicaCount: 0
   maxReplicaCount: 20
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          policies:
+          - type: Pods
+            value: 2
+            periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 30
   triggers:
   - type: azure-queue
     authenticationRef:
-      name: azurite-auth
+      name: azure-queue-auth
     metadata:
       queueName: jobs
       queueLength: "5"
       activationQueueLength: "0"
+  - type: metrics-api
+    metricType: AverageValue
+    metadata:
+      url: http://producer.default.svc.cluster.local:3000/metrics/production-rate
+      valueLocation: messagesPerSecond
+      # Match Queue:FixedConsumptionRatePerSecond on the consumer.
+      targetValue: "2"
+      activationTargetValue: "0"

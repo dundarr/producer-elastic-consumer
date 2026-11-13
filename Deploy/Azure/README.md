@@ -1,116 +1,73 @@
-# Local Kubernetes Demo: Azurite + KEDA + Queue-Based Scaling
+# Demo en Azure Kubernetes Service
 
-This project demonstrates event-driven autoscaling using:
-- **Azurite** as a local Azure Storage Queue emulator
-- **KEDA** to scale a consumer application based on Azure Queue length
-- A **producer** service (exposed externally) to enqueue messages
-- A **consumer** deployment that scales from 0 to 20 replicas based on the `jobs` queue
+La demo usa AKS, Azure Container Registry (ACR) y Azure Queue Storage. El panel y el productor se ejecutan en el espacio de nombres `default`.
 
-Everything is designed to run on a **local Kubernetes cluster** using **Docker Desktop** (or any single-node Kubernetes provided by Docker).
+## Preparar AKS y publicar las imágenes
 
-## Prerequisites
+Los ejemplos usan los nombres del proyecto. Ajusta las variables y las referencias a `pcdemoacr.azurecr.io` en los manifiestos si usas otro registro. El clúster debe tener acceso de lectura al ACR y acceso de red al servicio de colas de la cuenta de almacenamiento. Consulta la [integración de AKS con ACR](https://learn.microsoft.com/en-us/azure/aks/cluster-container-registry-integration).
 
-- Docker Desktop with Kubernetes enabled
-- `kubectl` configured to use the local cluster (e.g., `docker-desktop` context)
-- KEDA **not** pre-installed (instructions below will install it)
+Desde la raíz del repositorio, con la sesión de Azure iniciada:
 
-## Step 1: Install KEDA
+```powershell
+$resourceGroup = 'producer-consumer-demo-rg'
+$cluster = 'producer-consumer-demo-aks'
+$registry = 'pcdemoacr'
+$storage = 'prodconsdemost'
 
-KEDA is required for the `ScaledObject` and `TriggerAuthentication` resources.
+az acr build --registry $registry --image producer:latest Producer
+az acr build --registry $registry --image consumer:latest Consumer
+az acr build --registry $registry --image dashboard:latest blazor-ui
 
-```bash
-kubectl apply -f https://github.com/kedacore/keda/releases/latest/download/keda.yaml
-
-Wait until all pods in the keda namespace are running:
-
-kubectl get pods -n keda
+az aks get-credentials --resource-group $resourceGroup --name $cluster
+kubectl --context $cluster get nodes
 ```
 
-## Step 2: Apply the manifests
+Instala KEDA 2.18.2, la versión de la demo local, si el clúster carece de KEDA. Si ya tiene KEDA, incluido el complemento administrado de AKS, usa esa instalación y comprueba que admite los escaladores `azure-queue` y `metrics-api`. Consulta la [documentación de KEDA en AKS](https://learn.microsoft.com/en-us/azure/aks/keda-about).
 
-Apply the YAML files in the following order:
-```bash
-# 1. Azurite (storage emulator)
-kubectl apply -f k8s_azurite_deployment.yaml
-kubectl apply -f k8s_azurite_service.yaml
-
-# 2. Connection secret and KEDA authentication
-kubectl apply -f k8s_keda_secret.yaml
-kubectl apply -f k8s_keda_trigger_auth.yaml
-
-# 3. Service alias in KEDA namespace (needed for connection string resolution)
-kubectl apply -f k8s_keda_alias_for_azurite.yaml
-
-# 4. Producer (enqueues messages)
-kubectl apply -f k8s_producer_deployment.yaml
-kubectl apply -f k8s_producer_service.yaml
-
-# 5. Consumer (scaled by KEDA)
-kubectl apply -f k8s_consumer_deployment.yaml
-
-# 6. KEDA ScaledObject (the actual scaler)
-kubectl apply -f k8s_scaled_object.yaml
+```powershell
+kubectl --context $cluster apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.18.2/keda-2.18.2.yaml
+kubectl --context $cluster -n keda wait --for=condition=Available deployment --all --timeout=180s
 ```
 
-## Step 3: Verify the deployment
+## Configurar la cola y desplegar
 
-```bash
-kubectl get all -A | grep -E "azurite|producer|consumer|keda"
+Crea la cola `jobs` si aún no existe y guarda la conexión en el Secret que comparten el productor, el consumidor y KEDA. Estos comandos usan la clave de la cuenta de almacenamiento.
+
+```powershell
+$connection = az storage account show-connection-string --resource-group $resourceGroup --name $storage --query connectionString --output tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($connection)) {
+    throw 'No se pudo obtener la conexión de Azure Storage.'
+}
+try {
+    $env:AZURE_STORAGE_CONNECTION_STRING = $connection
+    az storage queue create --name jobs --only-show-errors --output none
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo preparar la cola jobs.' }
+
+    kubectl --context $cluster -n default create secret generic azure-queue-connection --from-literal="connection=$connection" --dry-run=client -o yaml |
+        kubectl --context $cluster -n default apply --server-side -f -
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo guardar la conexión en AKS.' }
+} finally {
+    Remove-Item Env:AZURE_STORAGE_CONNECTION_STRING -ErrorAction SilentlyContinue
+    Remove-Variable connection
+}
+
+kubectl --context $cluster -n default apply -f Deploy/Azure
+kubectl --context $cluster -n default rollout status deployment/producer --timeout=180s
+kubectl --context $cluster -n default rollout status deployment/dashboard --timeout=180s
+kubectl --context $cluster -n default wait --for=condition=Ready scaledobject/consumer-queue-scaler --timeout=120s
 ```
 
-You should see:
+Si vuelves a publicar la etiqueta `latest` y el manifiesto del despliegue sigue igual, reinicia el productor y el panel con `kubectl --context $cluster -n default rollout restart deployment/producer deployment/dashboard`. Si hay consumidores en ejecución, reinicia también `deployment/consumer`. Las nuevas réplicas descargan la imagen de ACR al arrancar.
 
-azurite pod running
-producer pod running
-consumer deployment with 0 replicas initially
-KEDA pods in the keda name
+## Abrir la demo
 
-## Step 4: Test the setup
+El panel y Swagger se abren mediante túneles locales. Ejecuta cada comando en una terminal.
 
-### Access the Producer
-
-The producer is exposed on 3000:
-
-Open
-```bash
-http://localhost:3000/swagger/index.html
-```
-in your browser.
-Use the producer's API/UI to enqueue messages into the jobs queue (endpoint depends on your producer implementation).
-
-### Observe scaling
-Watch the consumer scale:
-
-```bash
-kubectl get deployment consumer --watch
+```powershell
+kubectl --context producer-consumer-demo-aks -n default port-forward service/dashboard 5018:8080
+kubectl --context producer-consumer-demo-aks -n default port-forward service/producer 3000:3000
 ```
 
-When the jobs queue has 5 or more messages, KEDA will scale the consumer up. When the queue is empty, it scales back to 0.
+Abre el [panel](http://localhost:5018/) o [Swagger](http://localhost:3000/swagger/index.html). Si ya tienes la demo local abierta en esos puertos, cambia el número que precede a los dos puntos.
 
-## Cleanup
-
-Remove everything (in reverse order):
-```bash
-kubectl delete -f k8s_scaled_object.yaml
-kubectl delete -f k8s_consumer_deployment.yaml
-kubectl delete -f k8s_producer_deployment.yaml
-kubectl delete -f k8s_producer_service.yaml
-kubectl delete -f k8s_keda_trigger_auth.yaml
-kubectl delete -f k8s_keda_secret.yaml
-kubectl delete -f k8s_keda_alias_for_azurite.yaml
-kubectl delete -f k8s_azurite_service.yaml
-kubectl delete -f k8s_azurite_deployment.yaml
-```
-
-## Important notes
-
-The connection string uses the service name azurite. The alias in the keda namespace ensures KEDA can resolve it correctly.
-Azurite data is stored in an emptyDir volume → data is lost if the pod restarts.
-Consumer starts at 0 replicas to demonstrate true scale-from-zero.
-Images producer:latest and consumer:latest must be built and available locally or in a reachable registry.
-
-Sometimes I needed to execute :
-```bash
-kubectl rollout restart deploy/keda-operator -n keda
-```
-as it seems keda-operator kind of hangs sometimes.
+Con **5 msg/s** configurados y el productor activo, el ritmo pide **3 consumidores**. La cola puede pedir más réplicas si acumula mensajes, con un objetivo de **5 mensajes por réplica** y un máximo de **20**. Al pausar y vaciar la cola, KEDA espera **60 segundos** de inactividad antes de bajar a cero. Si cambias el límite de **2 msg/s por consumidor**, actualiza también el `targetValue` de `metrics-api` en el manifiesto.

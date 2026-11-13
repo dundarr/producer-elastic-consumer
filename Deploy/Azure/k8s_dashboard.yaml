@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: pcdemoacr.azurecr.io/dashboard:latest
+        imagePullPolicy: Always
+        env:
+        - name: ProducerApi__BaseUrl
+          value: http://producer:3000
+        ports:
+        - name: http
+          containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: dashboard
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http

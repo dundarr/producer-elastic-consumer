@@ -1,9 +1,9 @@
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
-  name: azurite-auth
+  name: azure-queue-auth
 spec:
   secretTargetRef:
   - parameter: connection
-    name: azurite-connection
+    name: azure-queue-connection
     key: connection

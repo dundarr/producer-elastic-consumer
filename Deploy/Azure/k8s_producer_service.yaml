@@ -3,10 +3,9 @@ kind: Service
 metadata:
   name: producer
 spec:
-  type: LoadBalancer   # Change from NodePort to LoadBalancer
+  type: ClusterIP
   selector:
     app: producer
   ports:
-  - port: 3000         # This is the port you'll access on localhost
+  - port: 3000
     targetPort: 3000
-    # No need for nodePort
